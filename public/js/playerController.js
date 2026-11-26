@@ -122,14 +122,69 @@ export class PlayerController {
       this.keys.delete(e.code);
     });
 
-    this.domElement.addEventListener('pointerdown', (e) => {
-      if (e.button === 0 || e.button === 2 || e.pointerType === 'touch') {
-        if (this.dragPointerId === null) {
-          this.isDragging = true;
-          this.dragPointerId = e.pointerId;
-          this.lastMouse.x = e.clientX;
-          this.lastMouse.y = e.clientY;
+    // Clear stuck keys/drag when window loses focus (e.g. iOS Control Center / app switch)
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.virtualX = 0;
+      this.virtualZ = 0;
+      this.isDragging = false;
+      this.dragPointerId = null;
+    });
+
+    // Touch camera orbit on canvas (separate from joystick touch!)
+    let camTouchId = null;
+    this.domElement.addEventListener(
+      'touchstart',
+      (e) => {
+        if (camTouchId !== null) return;
+        const t = e.changedTouches[0];
+        if (!t) return;
+        camTouchId = t.identifier;
+        this.lastMouse.x = t.clientX;
+        this.lastMouse.y = t.clientY;
+      },
+      { passive: true }
+    );
+
+    window.addEventListener(
+      'touchmove',
+      (e) => {
+        if (camTouchId === null) return;
+        for (let i = 0; i < e.touches.length; i++) {
+          const t = e.touches[i];
+          if (t.identifier === camTouchId) {
+            const dx = t.clientX - this.lastMouse.x;
+            const dy = t.clientY - this.lastMouse.y;
+            this.lastMouse.x = t.clientX;
+            this.lastMouse.y = t.clientY;
+            this.camYaw -= dx * 0.0085;
+            this.camPitch = Math.max(0.08, Math.min(1.18, this.camPitch + dy * 0.007));
+            return;
+          }
         }
+        camTouchId = null;
+      },
+      { passive: true }
+    );
+
+    const endCamTouch = (e) => {
+      if (camTouchId === null) return;
+      for (let i = 0; i < e.touches.length; i++) {
+        if (e.touches[i].identifier === camTouchId) return;
+      }
+      camTouchId = null;
+    };
+    window.addEventListener('touchend', endCamTouch, { passive: true });
+    window.addEventListener('touchcancel', endCamTouch, { passive: true });
+
+    // Mouse camera orbit on desktop
+    this.domElement.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') return;
+      if (e.button === 0 || e.button === 2) {
+        this.isDragging = true;
+        this.dragPointerId = e.pointerId;
+        this.lastMouse.x = e.clientX;
+        this.lastMouse.y = e.clientY;
       }
     });
 
@@ -143,15 +198,14 @@ export class PlayerController {
     window.addEventListener('pointercancel', endDrag);
 
     window.addEventListener('pointermove', (e) => {
-      if (!this.isDragging || e.pointerId !== this.dragPointerId) return;
+      if (e.pointerType === 'touch' || !this.isDragging || e.pointerId !== this.dragPointerId) return;
       const dx = e.clientX - this.lastMouse.x;
       const dy = e.clientY - this.lastMouse.y;
       this.lastMouse.x = e.clientX;
       this.lastMouse.y = e.clientY;
 
-      const sens = e.pointerType === 'touch' ? 0.0085 : 0.0065;
-      this.camYaw -= dx * sens;
-      this.camPitch = Math.max(0.08, Math.min(1.18, this.camPitch + dy * (sens * 0.85)));
+      this.camYaw -= dx * 0.0065;
+      this.camPitch = Math.max(0.08, Math.min(1.18, this.camPitch + dy * 0.0055));
     });
 
     this.domElement.addEventListener('contextmenu', (e) => e.preventDefault());

@@ -1,5 +1,5 @@
 // Aetheris: Skyward Guild — Service Worker (PWA)
-const CACHE_NAME = 'aetheris-pwa-v1';
+const CACHE_NAME = 'aetheris-pwa-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
