@@ -48,6 +48,8 @@ export class HumanCharacter {
     this.animTime = Math.random() * 10;
     this.blinkTimer = 2 + Math.random() * 3;
     this.nametagSprite = null;
+    this.emoteBubbleSprite = null;
+    this.emoteBubbleTimer = 0;
 
     this._createMaterials();
     this._buildBody();
@@ -644,9 +646,57 @@ export class HumanCharacter {
     this.root.add(this.nametagSprite);
   }
 
+  showEmoteBubble(emoji, duration = 3.2) {
+    if (this.emoteBubbleSprite) {
+      this.root.remove(this.emoteBubbleSprite);
+      this.emoteBubbleSprite.material.map.dispose();
+      this.emoteBubbleSprite.material.dispose();
+      this.emoteBubbleSprite = null;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = 'rgba(13, 24, 44, 0.85)';
+    ctx.strokeStyle = '#f0c45c';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(64, 60, 48, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = '56px system-ui, Apple Color Emoji, Segoe UI Emoji, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, 64, 62);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+    this.emoteBubbleSprite = new THREE.Sprite(mat);
+    const hasTallHat = this.avatar && this.avatar.accessory === 'mage_hat';
+    this.emoteBubbleSprite.position.set(0.68, hasTallHat ? 2.85 : 2.55, 0);
+    this.emoteBubbleSprite.scale.set(0.68, 0.68, 1);
+    this.root.add(this.emoteBubbleSprite);
+    this.emoteBubbleTimer = duration;
+  }
+
   update(dt, animState = 'idle', horizontalSpeed = 0, verticalVel = 0) {
     this.animTime += dt;
     const t = this.animTime;
+
+    if (this.emoteBubbleSprite) {
+      this.emoteBubbleTimer -= dt;
+      const pulse = 1 + Math.sin(t * 7) * 0.08;
+      this.emoteBubbleSprite.scale.setScalar(0.68 * pulse);
+      if (this.emoteBubbleTimer <= 0) {
+        this.root.remove(this.emoteBubbleSprite);
+        this.emoteBubbleSprite.material.map.dispose();
+        this.emoteBubbleSprite.material.dispose();
+        this.emoteBubbleSprite = null;
+      }
+    }
 
     this.blinkTimer -= dt;
     if (this.blinkTimer <= 0) {
@@ -662,6 +712,9 @@ export class HumanCharacter {
     let hipY = 0.88;
     let torsoPitch = 0;
     let torsoYaw = 0;
+    let torsoRoll = 0;
+    let headPitch = 0;
+    let headRoll = 0;
     let lHipX = 0, rHipX = 0, lKneeX = 0, rKneeX = 0;
     let lShX = 0, rShX = 0, lShZ = -0.14, rShZ = 0.14;
     let lElbX = -0.18, rElbX = -0.18;
@@ -711,6 +764,65 @@ export class HumanCharacter {
       rShZ = 0.65;
       lElbX = -0.3;
       rElbX = -0.3;
+    } else if (animState === 'emote_wave') {
+      // Friendly skyward wave with right arm raised & swaying!
+      const w = Math.sin(t * 9.5);
+      hipY = 0.88 + Math.sin(t * 3.5) * 0.018;
+      torsoRoll = -0.06;
+      headRoll = 0.12;
+      rShX = -2.45;
+      rShZ = 0.45 + w * 0.38;
+      rElbX = -0.55 + w * 0.18;
+      lShZ = -0.22;
+      lElbX = -0.35;
+    } else if (animState === 'emote_cheer') {
+      // Joyful celebration hops with both arms pumping to the sky!
+      const hop = Math.abs(Math.sin(t * 7.2));
+      const pump = Math.sin(t * 14.4);
+      hipY = 0.88 + hop * 0.22;
+      torsoPitch = -0.08;
+      headPitch = -0.15;
+      lShX = -2.65 + pump * 0.25;
+      rShX = -2.65 - pump * 0.25;
+      lShZ = -0.35;
+      rShZ = 0.35;
+      lElbX = -0.25;
+      rElbX = -0.25;
+      lHipX = -hop * 0.28;
+      rHipX = -hop * 0.28;
+      lKneeX = hop * 0.45;
+      rKneeX = hop * 0.45;
+    } else if (animState === 'emote_dance') {
+      // Energetic rhythmic Skyward Guild groove dance!
+      const beat = Math.sin(t * 6.8);
+      const doubleBeat = Math.sin(t * 13.6);
+      hipY = 0.86 + Math.abs(doubleBeat) * 0.08;
+      torsoYaw = beat * 0.32;
+      torsoRoll = beat * 0.14;
+      headPitch = Math.abs(doubleBeat) * 0.12;
+      headRoll = -beat * 0.16;
+
+      lShX = -0.95 + beat * 0.75;
+      rShX = -0.95 - beat * 0.75;
+      lShZ = -0.55 + doubleBeat * 0.25;
+      rShZ = 0.55 - doubleBeat * 0.25;
+      lElbX = -1.1 + beat * 0.35;
+      rElbX = -1.1 - beat * 0.35;
+
+      lHipX = Math.max(0, beat) * -0.45;
+      rHipX = Math.max(0, -beat) * -0.45;
+      lKneeX = Math.max(0, beat) * 0.75;
+      rKneeX = Math.max(0, -beat) * 0.75;
+    } else if (animState === 'emote_salute') {
+      // Proud Pathfinder guild salute!
+      hipY = 0.89;
+      torsoPitch = -0.04;
+      rShX = -1.95;
+      rShZ = 0.12;
+      rElbX = -1.55;
+      lShX = 0.08;
+      lShZ = -0.1;
+      lElbX = -0.15;
     } else {
       hipY = 0.88 + Math.sin(t * 2.2) * 0.015;
       torsoPitch = Math.sin(t * 2.2) * 0.025;
@@ -724,6 +836,9 @@ export class HumanCharacter {
     this.hips.position.y = lerp(this.hips.position.y, hipY, rate);
     this.torso.rotation.x = lerp(this.torso.rotation.x, torsoPitch, rate);
     this.torso.rotation.y = lerp(this.torso.rotation.y, torsoYaw, rate);
+    this.torso.rotation.z = lerp(this.torso.rotation.z, torsoRoll, rate);
+    this.headPivot.rotation.x = lerp(this.headPivot.rotation.x, headPitch, rate);
+    this.headPivot.rotation.z = lerp(this.headPivot.rotation.z, headRoll, rate);
 
     this.leftLeg.hip.rotation.x = lerp(this.leftLeg.hip.rotation.x, lHipX, rate);
     this.rightLeg.hip.rotation.x = lerp(this.rightLeg.hip.rotation.x, rHipX, rate);

@@ -3,7 +3,11 @@ const fs = require('fs');
 const path = require('path');
 const { buildHubWorld, SEED_MISSIONS } = require('./data/seedMissions');
 
-const DB_PATH = path.join(__dirname, 'data', 'db.json');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+const DB_PATH = path.join(DATA_DIR, 'db.json');
 
 const AVATAR_CATALOG = [
   {
@@ -249,6 +253,10 @@ function createDefaultDb() {
       lastRotatedAt: 0,
       nextRotationAt: 0
     },
+    serverConfig: {
+      rewardMultiplier: 1,
+      eventBanner: ''
+    },
     players: {},
     completions: []
   };
@@ -298,6 +306,11 @@ class GameStore {
         lastRotatedAt: 0,
         nextRotationAt: 0
       };
+      changed = true;
+    }
+
+    if (!this.db.serverConfig) {
+      this.db.serverConfig = { rewardMultiplier: 1, eventBanner: '' };
       changed = true;
     }
 
@@ -397,6 +410,78 @@ class GameStore {
     this.db.rotation.nextRotationAt = Date.now() + intervalMs;
     this.save();
     return this.getRotationInfo();
+  }
+
+  getServerConfig() {
+    return this.db.serverConfig || { rewardMultiplier: 1, eventBanner: '' };
+  }
+
+  updateServerConfig({ rewardMultiplier, eventBanner }) {
+    if (!this.db.serverConfig) this.db.serverConfig = { rewardMultiplier: 1, eventBanner: '' };
+    if (rewardMultiplier !== undefined) {
+      const val = Number(rewardMultiplier);
+      if ([1, 1.5, 2, 3].includes(val)) {
+        this.db.serverConfig.rewardMultiplier = val;
+      }
+    }
+    if (eventBanner !== undefined) {
+      this.db.serverConfig.eventBanner = String(eventBanner).trim().slice(0, 100);
+    }
+    this.save();
+    return this.db.serverConfig;
+  }
+
+  activateMissionNow(missionId) {
+    const m = this.db.missions.find((x) => x.id === missionId);
+    if (!m) throw new Error('Misi tidak ditemukan.');
+    m.isPublished = true;
+    const slots = this.db.rotation.slots || 3;
+    const ids = (this.db.rotation.activeMissionIds || []).filter((id) => id !== missionId);
+    ids.unshift(missionId);
+    this.db.rotation.activeMissionIds = ids.slice(0, slots);
+    this.save();
+    return {
+      mission: m,
+      activeMissions: this.getActiveMissions(),
+      rotation: this.getRotationInfo()
+    };
+  }
+
+  toggleMissionPublished(missionId) {
+    const m = this.db.missions.find((x) => x.id === missionId);
+    if (!m) throw new Error('Misi tidak ditemukan.');
+    m.isPublished = m.isPublished === false ? true : false;
+    if (!m.isPublished) {
+      this.db.rotation.activeMissionIds = (this.db.rotation.activeMissionIds || []).filter((id) => id !== missionId);
+      if (this.db.rotation.activeMissionIds.length === 0) {
+        this.rotateMissionsRandomly();
+      }
+    }
+    this.save();
+    return {
+      mission: m,
+      activeMissions: this.getActiveMissions(),
+      rotation: this.getRotationInfo()
+    };
+  }
+
+  giftPlayerCoins(playerId, amount) {
+    const player = this.db.players[playerId];
+    if (!player) throw new Error('Pemain tidak ditemukan.');
+    const delta = Math.max(10, Math.min(5000, Math.round(Number(amount) || 100)));
+    player.coins += delta;
+    this.save();
+    return { player, amount: delta };
+  }
+
+  getStats() {
+    return {
+      totalPlayers: Object.keys(this.db.players).length,
+      totalCompletions: this.db.completions.length,
+      poolTotal: this.db.missions.length,
+      publishedCount: this.db.missions.filter((m) => m.isPublished !== false).length,
+      cycleNumber: this.db.rotation.cycleNumber || 1
+    };
   }
 
   getRotationInfo() {
@@ -581,9 +666,10 @@ class GameStore {
     const safeTime = Math.max(1500, Math.round(Number(timeMs) || 30000));
     const prev = player.completedMissions[missionId];
     const isFirstClear = !prev;
-    const rewardMultiplier = isFirstClear ? 1 : 0.4;
-    const coinsEarned = Math.round((mission.reward.coins || 100) * rewardMultiplier);
-    const xpEarned = Math.round((mission.reward.xp || 80) * rewardMultiplier);
+    const baseMult = isFirstClear ? 1 : 0.4;
+    const eventMult = (this.db.serverConfig && this.db.serverConfig.rewardMultiplier) || 1;
+    const coinsEarned = Math.round((mission.reward.coins || 100) * baseMult * eventMult);
+    const xpEarned = Math.round((mission.reward.xp || 80) * baseMult * eventMult);
 
     player.coins += coinsEarned;
     player.xp += xpEarned;

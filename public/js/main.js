@@ -5,6 +5,9 @@ import { HumanCharacter } from './humanCharacter.js';
 import { WorldBuilder } from './worldBuilder.js';
 import { ParticleSystem } from './particles.js';
 import { PlayerController } from './playerController.js';
+import { NpcManager } from './npcManager.js';
+import { AudioManager } from './audioManager.js';
+import { GmMapEditor } from './gmMapEditor.js';
 
 // ======================== STATE ========================
 
@@ -20,6 +23,9 @@ const state = {
   costumes: [],
   missions: [],
   gmPool: [],
+  gmStats: null,
+  gmOnlinePlayers: [],
+  serverConfig: { rewardMultiplier: 1, eventBanner: '' },
   rotation: null,
   hub: null,
   currentWorld: null,
@@ -27,7 +33,9 @@ const state = {
   collectedRelics: 0,
   totalRelics: 0,
   missionClearedThisRun: false,
-  portalCooldown: 0
+  portalCooldown: 0,
+  nearbyNpc: null,
+  dialogOpen: false
 };
 localStorage.setItem('aetheris_player_id', state.playerId);
 
@@ -49,11 +57,13 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 450);
 
 const textures = createProceduralTextures();
+const audio = new AudioManager();
 const skyEnv = new SkyEnvironment(scene, textures);
 const particles = new ParticleSystem(scene, textures.glow);
 const worldBuilder = new WorldBuilder(scene, textures);
+const npcManager = new NpcManager(scene);
 const localCharacter = new HumanCharacter();
-const controller = new PlayerController(localCharacter, camera, canvas, textures.shadow, particles);
+const controller = new PlayerController(localCharacter, camera, canvas, textures.shadow, particles, audio);
 controller.attachToScene(scene);
 
 window.addEventListener('resize', () => {
@@ -159,11 +169,35 @@ socket.on('player_moved', (p) => {
   addOrUpdateRemotePlayer(p);
 });
 
-socket.on('player_left', ({ socketId }) => {
+socket.on('player_left', ({ socketId, username }) => {
   const rp = remotePlayers.get(socketId);
   if (rp) {
     scene.remove(rp.character.root);
     remotePlayers.delete(socketId);
+    if (username) {
+      addChatLine({ system: true, text: `${username} keluar dari area.` });
+    }
+  }
+});
+
+// Immediately disconnect cleanly when closing/refreshing tab so no ghost player lingers!
+window.addEventListener('pagehide', () => {
+  if (socket && socket.connected) socket.disconnect();
+});
+window.addEventListener('beforeunload', () => {
+  if (socket && socket.connected) socket.disconnect();
+});
+
+// Re-sync cleanly if player returns to a tab that was idle in the background
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.hasEnteredGame && state.currentWorld) {
+    if (!socket.connected) socket.connect();
+    socket.emit('join_room', {
+      roomId: state.currentWorld.id,
+      playerId: state.playerId,
+      username: state.username,
+      avatarId: state.selectedAvatarId
+    });
   }
 });
 
@@ -179,6 +213,23 @@ socket.on('bridge_activated', ({ bridgeId, by }) => {
 
 socket.on('chat_broadcast', (msg) => {
   addChatLine(msg);
+});
+
+socket.on('player_emote_broadcast', ({ socketId, emote, emoji }) => {
+  if (socketId === socket.id) return;
+  const rp = remotePlayers.get(socketId);
+  if (rp) {
+    rp.anim = emote;
+    rp.character.showEmoteBubble(emoji || '✨', 3.4);
+    particles.burst(new THREE.Vector3(rp.character.root.position.x, rp.character.root.position.y + 1.3, rp.character.root.position.z), {
+      count: 14,
+      color: emote === 'emote_dance' ? 0x52fff0 : 0xffdf70,
+      speed: 3.4,
+      size: 0.34,
+      upward: 2.2,
+      life: 0.65
+    });
+  }
 });
 
 socket.on('missions_updated', ({ reason, missionTitle, missions, rotation, hub }) => {
@@ -207,9 +258,37 @@ socket.on('missions_updated', ({ reason, missionTitle, missions, rotation, hub }
 
 socket.on('mission_completed_ack', (res) => {
   state.player = res.player;
+  audio.playVictory();
   updateProfileHUD();
   renderWardrobe();
   showVictoryModal(res);
+});
+
+let gmAnnTimer = null;
+socket.on('gm_announcement', ({ text }) => {
+  const banner = document.getElementById('gm-announcement-banner');
+  document.getElementById('gm-announcement-text').textContent = text;
+  banner.classList.remove('hidden');
+  audio.playCheckpoint();
+  clearTimeout(gmAnnTimer);
+  gmAnnTimer = setTimeout(() => banner.classList.add('hidden'), 7000);
+});
+
+socket.on('server_config_updated', ({ serverConfig }) => {
+  state.serverConfig = serverConfig || { rewardMultiplier: 1, eventBanner: '' };
+  updateEventBadge();
+});
+
+socket.on('gm_gift_received', ({ amount, player }) => {
+  state.player = player;
+  audio.playVictory();
+  updateProfileHUD();
+  showToast(`🎁 Game Master menghadiahimu +${amount} Koin!`, 'gold');
+});
+
+socket.on('gm_force_hub', ({ reason }) => {
+  showToast(reason || 'Kamu dipanggil ke Hub oleh Game Master.', 'gold');
+  joinRoom('skyward-hub');
 });
 
 // ======================== WORLD & MISSION FLOW ========================
@@ -232,7 +311,10 @@ function loadWorldIntoScene(world) {
   state.runStartMs = performance.now();
 
   skyEnv.applyTheme(world.environment);
+  audio.setWorldTheme(world.environment && world.environment.theme);
   worldBuilder.build(world);
+  npcManager.spawnForWorld(world.id);
+  closeNpcDialog();
   controller.setSpawn(world.spawn || [0, 3, 0], world.environment && world.environment.gravity);
 
   // Determine required relic count from mission objectives
@@ -280,6 +362,7 @@ function checkWorldInteractions() {
       r.collected = true;
       r.obj.visible = false;
       state.collectedRelics += 1;
+      audio.playRelic();
       particles.burst(r.obj.position, { count: 22, color: 0x52fff0, speed: 5.2, size: 0.45, upward: 3.0, life: 0.75 });
       updateObjectiveTracker();
       if (state.collectedRelics >= state.totalRelics) {
@@ -299,6 +382,7 @@ function checkWorldInteractions() {
       cp.crystalMat.emissive.set('#ffae19');
       cp.crystalMat.emissiveIntensity = 1.45;
       controller.setCheckpoint(cp.pos);
+      audio.playCheckpoint();
       particles.burst(cp.pos, { count: 24, color: 0xffe46b, speed: 4.8, size: 0.48, upward: 3.5, life: 0.8 });
       showToast('Waystone Checkpoint diaktifkan!', 'gold');
     }
@@ -310,6 +394,7 @@ function checkWorldInteractions() {
     if (p.distanceTo(sw.pos) < sw.radius + 0.6) {
       worldBuilder.activateBridge(sw.bridgeId);
       socket.emit('activate_switch', { bridgeId: sw.bridgeId });
+      audio.playSwitch();
       particles.burst(sw.pos, { count: 24, color: 0x38ffd6, speed: 5.0, size: 0.45, upward: 3.2, life: 0.8 });
       showToast('Rune diaktifkan! Jembatan Cahaya telah terbuka!', 'gold');
     }
@@ -319,6 +404,7 @@ function checkWorldInteractions() {
   if (state.portalCooldown <= 0) {
     for (const portal of worldBuilder.portals) {
       if (p.distanceTo(portal.pos) < portal.radius) {
+        audio.playPortal();
         joinRoom(portal.missionId);
         return;
       }
@@ -350,6 +436,22 @@ function checkWorldInteractions() {
 
 function updateOnlineCounter(count) {
   document.getElementById('hud-online').textContent = `${count} Online`;
+  const statOnline = document.getElementById('gm-stat-online');
+  if (statOnline) statOnline.textContent = String(count);
+}
+
+function updateEventBadge() {
+  const pill = document.getElementById('hud-event-pill');
+  const mult = (state.serverConfig && state.serverConfig.rewardMultiplier) || 1;
+  if (mult > 1) {
+    const label = state.serverConfig.eventBanner ? `⚡ ${mult}x ${state.serverConfig.eventBanner}` : `⚡ ${mult}x BONUS`;
+    pill.textContent = label;
+    pill.classList.remove('hidden');
+  } else {
+    pill.classList.add('hidden');
+  }
+  const statMult = document.getElementById('gm-stat-mult');
+  if (statMult) statMult.textContent = `${mult}x`;
 }
 
 function updateProfileHUD() {
@@ -395,6 +497,7 @@ function renderAvatarCards(containerId, activeId, onSelect) {
 
 function previewEntryAvatar(av) {
   state.selectedAvatarId = av.id;
+  if (audio.unlocked) audio.playUiClick();
   localCharacter.setAvatar(av, null);
   particles.burst(new THREE.Vector3(controller.pos.x, controller.pos.y + 1.0, controller.pos.z), {
     count: 18,
@@ -644,6 +747,129 @@ function updateRotationBanner() {
 
 setInterval(updateRotationBanner, 1000);
 
+let gmMapEditor = null;
+
+function initGmMapEditor() {
+  if (gmMapEditor) return;
+  const mapCanvas = document.getElementById('gm-map-canvas');
+  if (!mapCanvas) return;
+
+  const updateInspector = () => {
+    if (!gmMapEditor) return;
+    const sel = gmMapEditor.getSelected();
+    const infoEl = document.getElementById('map-sel-info');
+    document.getElementById('map-relic-count').textContent = String(gmMapEditor.getRelicCount());
+    if (sel) {
+      const meta = GmMapEditor.getPieceTypes()[sel.type] || { label: sel.type };
+      infoEl.textContent = `Terpilih: ${meta.label} (X:${sel.pos[0]}, Y:${sel.pos[1]}, Z:${sel.pos[2]}) — Seret untuk pindah`;
+    } else {
+      infoEl.textContent = `Total ${gmMapEditor.pieces.length} objek. Klik kanvas untuk menaruh, atau klik objek untuk menggeser.`;
+    }
+  };
+
+  gmMapEditor = new GmMapEditor(mapCanvas, updateInspector);
+
+  const palEl = document.getElementById('map-palette');
+  palEl.innerHTML = '';
+  for (const [key, meta] of Object.entries(GmMapEditor.getPieceTypes())) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `palette-btn ${key === 'stepping_stone' ? 'active' : ''}`;
+    b.textContent = `${meta.icon} ${meta.label}`;
+    b.addEventListener('click', () => {
+      gmMapEditor.setTool(key);
+      palEl.querySelectorAll('.palette-btn').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+    });
+    palEl.appendChild(b);
+  }
+
+  document.getElementById('btn-map-y-up').addEventListener('click', () => gmMapEditor.updateSelectedY(1));
+  document.getElementById('btn-map-y-down').addEventListener('click', () => gmMapEditor.updateSelectedY(-1));
+  document.getElementById('btn-map-del').addEventListener('click', () => gmMapEditor.deleteSelected());
+  document.getElementById('btn-map-template').addEventListener('click', () => gmMapEditor.loadDefaultTemplate());
+  updateInspector();
+}
+
+function loadMissionIntoEditor(m) {
+  initGmMapEditor();
+  document.getElementById('st-edit-id').value = m.id;
+  document.getElementById('st-mode-badge').textContent = `Edit v${m.version || 1}`;
+  document.getElementById('st-title').value = m.title || '';
+  document.getElementById('st-subtitle').value = m.subtitle || '';
+  document.getElementById('st-category').value = m.category || 'daily';
+  document.getElementById('st-difficulty').value = m.difficulty || 'Menengah';
+  document.getElementById('st-theme').value = (m.environment && m.environment.theme) || 'golden_sky';
+  document.getElementById('st-coins').value = (m.reward && m.reward.coins) || 200;
+  gmMapEditor.loadPieces(m.pieces || []);
+  document.querySelector('.gm-tab[data-tab="create"]').click();
+}
+
+function renderGmDashboardData() {
+  // Stats Bar
+  if (state.gmStats) {
+    document.getElementById('gm-stat-pool').textContent = String(state.gmStats.poolTotal);
+    document.getElementById('gm-stat-cycle').textContent = `#${state.gmStats.cycleNumber}`;
+    document.getElementById('gm-stat-clears').textContent = String(state.gmStats.totalCompletions);
+  }
+  document.getElementById('gm-stat-online').textContent = String((state.gmOnlinePlayers || []).length);
+  updateEventBadge();
+
+  if (state.serverConfig) {
+    document.getElementById('gm-event-mult').value = String(state.serverConfig.rewardMultiplier || 1);
+    document.getElementById('gm-event-label').value = state.serverConfig.eventBanner || '';
+  }
+
+  renderGmPool();
+  renderGmOnlinePlayers();
+}
+
+function renderGmOnlinePlayers() {
+  const box = document.getElementById('gm-online-players');
+  if (!box) return;
+  box.innerHTML = '';
+  const list = state.gmOnlinePlayers || [];
+  if (list.length === 0) {
+    box.innerHTML = '<p class="muted" style="font-size:12.5px">Belum ada pemain aktif di dalam ruangan.</p>';
+    return;
+  }
+  for (const p of list) {
+    const row = document.createElement('div');
+    row.className = 'gm-pool-item active-now';
+    row.innerHTML = `
+      <div class="gm-pool-info">
+        <strong>${escapeHtml(p.username)} <small style="color:var(--teal)">Lv.${p.level}</small></strong>
+        <span>Di: ${escapeHtml(p.roomTitle)} • 🪙 ${p.coins} Koin</span>
+      </div>
+      <div class="gm-pool-badges">
+        <button class="hud-btn gold btn-gift" title="Hadiahkan +100 Koin">🎁 +100</button>
+        <button class="hud-btn btn-pull" title="Tarik kembali ke Skyward Hub">🌀 Hub</button>
+      </div>
+    `;
+    row.querySelector('.btn-gift').addEventListener('click', async () => {
+      const resp = await fetch(`/api/gm/players/${encodeURIComponent(p.playerId)}/gift`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-GM-Token': state.gmToken || '' },
+        body: JSON.stringify({ amount: 100 })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        state.gmOnlinePlayers = data.onlinePlayers;
+        renderGmOnlinePlayers();
+        showToast(`🎁 +100 Koin dikirim ke ${p.username}!`, 'gold');
+      }
+    });
+    row.querySelector('.btn-pull').addEventListener('click', async () => {
+      const resp = await fetch(`/api/gm/players/${encodeURIComponent(p.socketId)}/teleport-hub`, {
+        method: 'POST',
+        headers: { 'X-GM-Token': state.gmToken || '' }
+      });
+      if (resp.ok) showToast(`🌀 ${p.username} ditarik ke Skyward Hub!`, 'info');
+    });
+    box.appendChild(row);
+  }
+}
+
 function renderGmPool() {
   const list = document.getElementById('gm-pool-list');
   const countEl = document.getElementById('gm-pool-count');
@@ -657,19 +883,62 @@ function renderGmPool() {
   }
 
   for (const m of state.gmPool) {
+    const paused = m.isPublished === false;
+    const badgeHtml = m.isActiveNow
+      ? '<span class="badge-active">AKTIF</span>'
+      : (paused ? '<span class="badge-paused">NONAKTIF</span>' : '<span class="badge-vault">POOL</span>');
+
     const row = document.createElement('div');
     row.className = `gm-pool-item ${m.isActiveNow ? 'active-now' : ''}`;
     row.innerHTML = `
       <div class="gm-pool-info">
         <strong>${escapeHtml(m.title)}</strong>
-        <span>${m.difficulty} • 🪙 ${m.reward.coins} Koin • ${m.environment ? m.environment.theme : 'golden_sky'}</span>
+        <span>${m.difficulty} • 🪙 ${m.reward.coins} • ${(m.pieces || []).length} objek</span>
       </div>
       <div class="gm-pool-badges">
-        <span class="${m.isActiveNow ? 'badge-active' : 'badge-vault'}">${m.isActiveNow ? 'AKTIF SEKARANG' : 'DI POOL'}</span>
-        <button class="hud-btn btn-gm-test" title="Coba mainkan misi ini">▶</button>
+        ${badgeHtml}
+        ${!m.isActiveNow ? '<button class="hud-btn gold btn-gm-pin" title="Aktifkan sekarang di Portal Hub">⭐</button>' : ''}
+        <button class="hud-btn btn-gm-edit" title="Edit Map Visual">✏️</button>
+        <button class="hud-btn btn-gm-toggle" title="${paused ? 'Aktifkan kembali di Pool' : 'Nonaktifkan sementara dari Pool'}">${paused ? '▶' : '⏸'}</button>
+        <button class="hud-btn accent btn-gm-test" title="Uji mainkan misi">🚀</button>
         <button class="hud-btn danger btn-gm-del" title="Hapus dari pool">✕</button>
       </div>
     `;
+    const pinBtn = row.querySelector('.btn-gm-pin');
+    if (pinBtn) {
+      pinBtn.addEventListener('click', async () => {
+        const resp = await fetch(`/api/gm/missions/${encodeURIComponent(m.id)}/activate`, {
+          method: 'POST',
+          headers: { 'X-GM-Token': state.gmToken || '' }
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          state.missions = data.missions;
+          state.gmPool = data.pool;
+          state.rotation = data.rotation;
+          state.gmStats = data.stats;
+          renderGmDashboardData();
+          renderMissionBoard();
+          showToast(`⭐ "${m.title}" langsung aktif di Portal Hub!`, 'gold');
+        }
+      });
+    }
+    row.querySelector('.btn-gm-edit').addEventListener('click', () => loadMissionIntoEditor(m));
+    row.querySelector('.btn-gm-toggle').addEventListener('click', async () => {
+      const resp = await fetch(`/api/gm/missions/${encodeURIComponent(m.id)}/toggle`, {
+        method: 'POST',
+        headers: { 'X-GM-Token': state.gmToken || '' }
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        state.missions = data.missions;
+        state.gmPool = data.pool;
+        state.rotation = data.rotation;
+        state.gmStats = data.stats;
+        renderGmDashboardData();
+        renderMissionBoard();
+      }
+    });
     row.querySelector('.btn-gm-test').addEventListener('click', () => joinRoom(m.id));
     row.querySelector('.btn-gm-del').addEventListener('click', async () => {
       if (!window.confirm(`Hapus misi "${m.title}" dari pool?`)) return;
@@ -685,7 +954,7 @@ function renderGmPool() {
       state.missions = data.missions;
       state.gmPool = data.pool;
       state.rotation = data.rotation;
-      renderGmPool();
+      renderGmDashboardData();
       renderMissionBoard();
     });
     list.appendChild(row);
@@ -703,9 +972,13 @@ async function openGmPanel() {
       const data = await resp.json();
       state.gmPool = data.pool;
       state.rotation = data.rotation;
+      state.serverConfig = data.serverConfig || state.serverConfig;
+      state.gmStats = data.stats;
+      state.gmOnlinePlayers = data.onlinePlayers || [];
       document.getElementById('gm-login-form').classList.add('hidden');
       document.getElementById('gm-dashboard').classList.remove('hidden');
-      renderGmPool();
+      initGmMapEditor();
+      renderGmDashboardData();
       return;
     }
     state.gmToken = null;
@@ -724,6 +997,114 @@ const THEME_PRESETS = {
   crimson_dusk: { theme: 'crimson_dusk', skyTop: '#231942', skyMid: '#9f4a68', skyHorizon: '#ff9e6d', fogColor: '#d98a7c', sunColor: '#ffb578', ambientColor: '#d490a6', gravity: -28 },
   twilight_astral: { theme: 'twilight_astral', skyTop: '#0d1538', skyMid: '#2f296e', skyHorizon: '#7e5ba6', fogColor: '#362e6e', sunColor: '#c2d8ff', ambientColor: '#7a75c9', gravity: -27 }
 };
+
+const EMOTE_META = {
+  emote_wave: { emoji: '👋', duration: 3.6, color: 0xffe48f },
+  emote_cheer: { emoji: '🎉', duration: 4.0, color: 0xffd24d },
+  emote_dance: { emoji: '💃', duration: 8.5, color: 0x52fff0 },
+  emote_salute: { emoji: '🫡', duration: 3.6, color: 0x8fd6ff }
+};
+
+function triggerLocalEmote(emoteName) {
+  if (!state.hasEnteredGame) return;
+  const meta = EMOTE_META[emoteName];
+  if (!meta) return;
+  if (!controller.playEmote(emoteName, meta.duration)) {
+    showToast('Mendaratlah dulu untuk melakukan emote!', 'warn');
+    return;
+  }
+  audio.playEmote(emoteName);
+  localCharacter.showEmoteBubble(meta.emoji, Math.min(4.0, meta.duration));
+  particles.burst(new THREE.Vector3(controller.pos.x, controller.pos.y + 1.35, controller.pos.z), {
+    count: 16,
+    color: meta.color,
+    speed: 3.6,
+    size: 0.36,
+    upward: 2.6,
+    life: 0.7
+  });
+  socket.emit('player_emote', { emote: emoteName });
+  document.querySelectorAll('.emote-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.emote === emoteName);
+  });
+}
+
+function closeNpcDialog() {
+  state.dialogOpen = false;
+  const el = document.getElementById('npc-dialog');
+  if (el) el.classList.add('hidden');
+}
+
+function openNpcDialog(npc) {
+  if (!npc) return;
+  window.closeAllModals();
+  audio.playNpcTalk();
+  state.dialogOpen = true;
+  document.getElementById('npc-prompt').classList.add('hidden');
+
+  const cfg = npc.cfg;
+  document.getElementById('npc-dialog-icon').textContent = cfg.icon;
+  document.getElementById('npc-dialog-name').textContent = cfg.name;
+  document.getElementById('npc-dialog-role').textContent = cfg.role;
+
+  const speechEl = document.getElementById('npc-dialog-speech');
+  const choicesEl = document.getElementById('npc-dialog-choices');
+  choicesEl.innerHTML = '';
+
+  if (cfg.kind === 'questgiver') {
+    const cycle = state.rotation ? state.rotation.cycleNumber : 1;
+    speechEl.textContent = `Selamat datang, ${state.username}! Pada Siklus Acak #${cycle} ini, Skyward Guild telah membuka ${state.missions.length} gerbang misi baru di kepulauan langit. Pilih misi yang ingin langsung kamu ambil!`;
+
+    for (const m of state.missions) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'npc-choice-btn';
+      btn.innerHTML = `
+        <strong>⚔️ ${escapeHtml(m.title)}</strong>
+        <span>${m.difficulty} • 🪙 +${m.reward.coins} Koin • ✨ +${m.reward.xp} XP</span>
+      `;
+      btn.addEventListener('click', () => {
+        closeNpcDialog();
+        joinRoom(m.id);
+      });
+      choicesEl.appendChild(btn);
+    }
+
+    const boardBtn = document.createElement('button');
+    boardBtn.type = 'button';
+    boardBtn.className = 'npc-choice-btn';
+    boardBtn.innerHTML = `<strong>📜 Lihat Jadwal Rotasi</strong><span>Cek timer rotasi acak berikutnya</span>`;
+    boardBtn.addEventListener('click', () => {
+      closeNpcDialog();
+      renderMissionBoard();
+      updateRotationBanner();
+      document.getElementById('modal-missions').classList.remove('hidden');
+    });
+    choicesEl.appendChild(boardBtn);
+  } else {
+    speechEl.textContent = `Hei ${state.username}! Siap beraksi di udara? Gunakan Space dua kali untuk Double Jump, dan coba tombol 1–4 untuk melakukan Emote bareng penjelajah lain di Hub! Mau coba emote sekarang?`;
+
+    const actions = [
+      { label: '👋 Melambai Ramah', sub: 'Sapa semua pemain di Hub', emote: 'emote_wave' },
+      { label: '🎉 Selebrasi Guild', sub: 'Rayakan kemenangan misi', emote: 'emote_cheer' },
+      { label: '💃 Menari di Plaza', sub: 'Bergoyang ceria bareng teman', emote: 'emote_dance' }
+    ];
+    for (const act of actions) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'npc-choice-btn';
+      btn.innerHTML = `<strong>${act.label}</strong><span>${act.sub}</span>`;
+      btn.addEventListener('click', () => {
+        closeNpcDialog();
+        npc.character.showEmoteBubble(EMOTE_META[act.emote].emoji, 3.2);
+        triggerLocalEmote(act.emote);
+      });
+      choicesEl.appendChild(btn);
+    }
+  }
+
+  document.getElementById('npc-dialog').classList.remove('hidden');
+}
 
 function bindUI() {
   const modals = ['modal-missions', 'modal-wardrobe', 'modal-gm', 'modal-leaderboard', 'modal-victory'];
@@ -746,6 +1127,18 @@ function bindUI() {
     openModal('modal-wardrobe');
   });
   document.getElementById('btn-gm').addEventListener('click', openGmPanel);
+  const audioBtn = document.getElementById('btn-audio');
+  const syncAudioBtn = () => {
+    audioBtn.textContent = audio.muted ? '🔇' : '🔊';
+    audioBtn.title = audio.muted ? 'Suara Mati (klik untuk aktifkan)' : 'Suara Aktif (klik untuk matikan)';
+  };
+  syncAudioBtn();
+  audioBtn.addEventListener('click', () => {
+    const muted = audio.toggleMute();
+    syncAudioBtn();
+    if (!muted) audio.playUiClick();
+    showToast(muted ? '🔇 Musik & Efek Suara dimatikan' : '🔊 Musik & Efek Suara diaktifkan!', 'info');
+  });
   document.getElementById('btn-leaderboard').addEventListener('click', () => {
     renderLeaderboard();
     openModal('modal-leaderboard');
@@ -757,7 +1150,40 @@ function bindUI() {
   });
 
   document.querySelectorAll('.modal-close').forEach((btn) => {
-    btn.addEventListener('click', () => window.closeAllModals());
+    btn.addEventListener('click', () => {
+      window.closeAllModals();
+      closeNpcDialog();
+    });
+  });
+
+  // Emote Bar Clicks
+  document.querySelectorAll('.emote-btn').forEach((btn) => {
+    btn.addEventListener('click', () => triggerLocalEmote(btn.dataset.emote));
+  });
+
+  // NPC Interaction Prompt Click + Keyboard Hotkeys (F for NPC, 1-4 for Emotes, Escape to close)
+  document.getElementById('npc-prompt').addEventListener('click', () => {
+    if (state.nearbyNpc) openNpcDialog(state.nearbyNpc);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (!state.hasEnteredGame) return;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+    if (e.code === 'KeyF' && state.nearbyNpc && !state.dialogOpen) {
+      e.preventDefault();
+      openNpcDialog(state.nearbyNpc);
+    } else if (e.code === 'Escape') {
+      closeNpcDialog();
+      window.closeAllModals();
+    } else if (e.code === 'Digit1') {
+      triggerLocalEmote('emote_wave');
+    } else if (e.code === 'Digit2') {
+      triggerLocalEmote('emote_cheer');
+    } else if (e.code === 'Digit3') {
+      triggerLocalEmote('emote_dance');
+    } else if (e.code === 'Digit4') {
+      triggerLocalEmote('emote_salute');
+    }
   });
 
   // Drag on 3D canvas during Entry Showcase to spin avatar 360°!
@@ -809,9 +1235,12 @@ function bindUI() {
 
     state.player = data.player;
     state.hasEnteredGame = true;
+    audio.ensureReady();
+    audio.playPortal();
     document.getElementById('entry-screen').classList.add('hidden');
     document.getElementById('hud-top').classList.remove('hidden');
     document.getElementById('chat-panel').classList.remove('hidden');
+    document.getElementById('emote-bar').classList.remove('hidden');
     document.getElementById('controls-hint').classList.remove('hidden');
 
     controller.inputEnabled = true;
@@ -846,10 +1275,14 @@ function bindUI() {
     sessionStorage.setItem('aetheris_gm_token', data.token);
     state.gmPool = data.pool;
     state.rotation = data.rotation;
+    state.serverConfig = data.serverConfig || state.serverConfig;
+    state.gmStats = data.stats;
+    state.gmOnlinePlayers = data.onlinePlayers || [];
     document.getElementById('gm-secret-input').value = '';
     document.getElementById('gm-login-form').classList.add('hidden');
     document.getElementById('gm-dashboard').classList.remove('hidden');
-    renderGmPool();
+    initGmMapEditor();
+    renderGmDashboardData();
     showToast('🛡️ Login Game Master berhasil!', 'gold');
   });
 
@@ -860,7 +1293,7 @@ function bindUI() {
     showToast('Keluar dari mode Game Master.', 'info');
   });
 
-  // GM Dashboard Tabs
+  // GM Dashboard Tabs (Pool, Visual Map Editor, World & Players)
   document.querySelectorAll('.gm-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.gm-tab').forEach((t) => t.classList.remove('active'));
@@ -868,7 +1301,65 @@ function bindUI() {
       const target = tab.dataset.tab;
       document.getElementById('gm-tab-pool').classList.toggle('hidden', target !== 'pool');
       document.getElementById('gm-tab-create').classList.toggle('hidden', target !== 'create');
+      document.getElementById('gm-tab-world').classList.toggle('hidden', target !== 'world');
+      if (target === 'create') {
+        initGmMapEditor();
+        gmMapEditor.render();
+      }
     });
+  });
+
+  // Reset Studio Form to "New Mission"
+  document.getElementById('btn-studio-reset').addEventListener('click', () => {
+    document.getElementById('studio-form').reset();
+    document.getElementById('st-edit-id').value = '';
+    document.getElementById('st-mode-badge').textContent = 'Misi Baru';
+    if (gmMapEditor) gmMapEditor.loadDefaultTemplate();
+  });
+
+  // GM Global Announcement Broadcast
+  document.getElementById('gm-announce-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('gm-announce-input');
+    const text = input.value.trim();
+    if (!text) return;
+    const resp = await fetch('/api/gm/announce', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-GM-Token': state.gmToken || '' },
+      body: JSON.stringify({ text })
+    });
+    if (resp.ok) {
+      input.value = '';
+      showToast('📢 Pengumuman global disiarkan!', 'gold');
+    }
+  });
+
+  // GM Event Multiplier Config
+  document.getElementById('btn-gm-save-event').addEventListener('click', async () => {
+    const rewardMultiplier = Number(document.getElementById('gm-event-mult').value) || 1;
+    const eventBanner = document.getElementById('gm-event-label').value.trim();
+    const resp = await fetch('/api/gm/event-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-GM-Token': state.gmToken || '' },
+      body: JSON.stringify({ rewardMultiplier, eventBanner })
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      state.serverConfig = data.serverConfig;
+      updateEventBadge();
+      showToast(`⚡ Event server diperbarui (${rewardMultiplier}x Hadiah)!`, 'gold');
+    }
+  });
+
+  // GM Refresh Online Players List
+  document.getElementById('btn-gm-refresh-players').addEventListener('click', async () => {
+    const resp = await fetch('/api/gm/pool', { headers: { 'X-GM-Token': state.gmToken || '' } });
+    if (resp.ok) {
+      const data = await resp.json();
+      state.gmOnlinePlayers = data.onlinePlayers || [];
+      state.gmStats = data.stats;
+      renderGmDashboardData();
+    }
   });
 
   // GM Save Rotation Config
@@ -939,36 +1430,41 @@ function bindUI() {
     chatInput.blur();
   });
 
-  // GM-Only Add Mission to Pool Form
+  // GM-Only Visual Map & Mission Save Form
   document.getElementById('studio-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    initGmMapEditor();
+    const editId = document.getElementById('st-edit-id').value.trim();
     const title = document.getElementById('st-title').value.trim();
     const subtitle = document.getElementById('st-subtitle').value.trim();
     const category = document.getElementById('st-category').value;
     const difficulty = document.getElementById('st-difficulty').value;
     const theme = document.getElementById('st-theme').value;
     const coins = Number(document.getElementById('st-coins').value) || 200;
-    const relicCount = Math.max(1, Math.min(6, Number(document.getElementById('st-relics').value) || 3));
     const featureNow = document.getElementById('st-feature-now').checked;
+    const pieces = gmMapEditor.getPieces();
+    const relicCount = gmMapEditor.getRelicCount();
 
     const payload = {
+      id: editId || undefined,
       title,
-      subtitle: subtitle || `Tantangan ${difficulty} baru dari Game Master!`,
+      subtitle: subtitle || `Tantangan ${difficulty} buatan Game Master!`,
       category,
       difficulty,
       featureNow,
       reward: { coins, xp: Math.round(coins * 0.8) },
       objectives: [
-        { id: 'obj_rel', type: 'collect', label: 'Kumpulkan Kristal Aether', targetTag: 'aether_relic', requiredCount: relicCount },
+        ...(relicCount > 0 ? [{ id: 'obj_rel', type: 'collect', label: 'Kumpulkan Kristal Aether', targetTag: 'aether_relic', requiredCount: relicCount }] : []),
         { id: 'obj_goal', type: 'reach_zone', label: 'Masuki Gerbang Portal Puncak', targetId: 'finish_portal' }
       ],
       environment: THEME_PRESETS[theme] || THEME_PRESETS.golden_sky,
       spawn: [0, 2.5, 2],
-      pieces: buildProceduralMissionPieces(theme, difficulty, relicCount)
+      pieces
     };
 
-    const resp = await fetch('/api/missions', {
-      method: 'POST',
+    const url = editId ? `/api/missions/${encodeURIComponent(editId)}` : '/api/missions';
+    const resp = await fetch(url, {
+      method: editId ? 'PUT' : 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-GM-Token': state.gmToken || ''
@@ -983,11 +1479,14 @@ function bindUI() {
     state.missions = data.missions;
     state.gmPool = data.pool;
     state.rotation = data.rotation;
-    renderGmPool();
+    renderGmDashboardData();
     renderMissionBoard();
     document.getElementById('studio-form').reset();
+    document.getElementById('st-edit-id').value = '';
+    document.getElementById('st-mode-badge').textContent = 'Misi Baru';
+    gmMapEditor.loadDefaultTemplate();
     document.querySelector('.gm-tab[data-tab="pool"]').click();
-    showToast(`🛡️ Misi "${data.mission.title}" berhasil ditambahkan ke Pool!`, 'gold');
+    showToast(`🛡️ Map Misi "${data.mission.title}" berhasil disimpan!`, 'gold');
   });
 }
 
@@ -1028,11 +1527,30 @@ function animate() {
   }
 
   const hSpeed = controller.update(dt, worldBuilder, {
-    onFall: () => showToast('Jatuh ke lautan awan! Kembali ke Checkpoint...', 'warn')
+    onFall: () => {
+      audio.playFall();
+      showToast('Jatuh ke lautan awan! Kembali ke Checkpoint...', 'warn');
+    }
   });
   skyEnv.update(dt, elapsed, controller.pos);
   particles.update(dt);
   checkWorldInteractions();
+
+  // Update Hub NPCs & Floating Interaction Prompt
+  const nearestNpc = npcManager.update(dt, elapsed, controller.pos);
+  state.nearbyNpc = nearestNpc;
+  const promptEl = document.getElementById('npc-prompt');
+  if (nearestNpc && !state.dialogOpen) {
+    document.getElementById('npc-prompt-text').textContent = `Bicara dengan ${nearestNpc.cfg.name} (${nearestNpc.cfg.role})`;
+    promptEl.classList.remove('hidden');
+  } else {
+    promptEl.classList.add('hidden');
+  }
+
+  // Sync active emote highlight on bottom emote bar
+  if (!controller.activeEmote) {
+    document.querySelectorAll('.emote-btn.active').forEach((b) => b.classList.remove('active'));
+  }
 
   // Update mission timer HUD
   if (state.currentWorld && state.currentWorld.category !== 'hub' && !state.missionClearedThisRun) {
@@ -1050,9 +1568,9 @@ function animate() {
     rp.character.update(dt, rp.anim, rp.speed, rp.anim === 'fall' ? -8 : 0);
   }
 
-  // Send local player state at ~18 Hz
+  // Send local player state at ~18 Hz only while tab is active/visible
   netSyncTimer += dt;
-  if (netSyncTimer >= 0.055 && state.currentWorld) {
+  if (netSyncTimer >= 0.055 && state.currentWorld && !document.hidden) {
     netSyncTimer = 0;
     socket.emit('player_state', {
       pos: [
@@ -1085,7 +1603,9 @@ async function boot() {
   state.costumes = data.costumes || [];
   state.missions = data.missions || [];
   state.rotation = data.rotation;
+  state.serverConfig = data.serverConfig || { rewardMultiplier: 1, eventBanner: '' };
   state.hub = data.hub;
+  updateEventBadge();
 
   // Build Skyward Hub backdrop immediately for the live 3D Character Selection showcase!
   skyEnv.applyTheme(state.hub.environment);

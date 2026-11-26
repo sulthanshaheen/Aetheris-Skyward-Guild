@@ -29,4 +29,29 @@ GM_SECRET=rahasia-gm-kamu npm start
 - **W A S D / Panah:** Gerak
 - **Space:** Lompat / *Double Jump*
 - **Shift:** *Sprint*
+- **F:** Bicara dengan NPC Hub
+- **1–4:** Emote Karakter (Lambai, Selebrasi, Menari, Hormat)
 - **Drag Mouse / Q & E:** Putar kamera (Scroll untuk zoom)
+
+## Deploy ke Fly.io
+
+Proyek ini sudah dilengkapi `Dockerfile`, `fly.toml` (region `sin` / Singapura dengan persistent volume `/data` untuk menyimpan progres pemain & misi GM), dan healthcheck `/health`.
+
+```bash
+# 1. Install Fly CLI (macOS)
+brew install flyctl
+
+# 2. Login ke akun Fly.io
+fly auth login
+
+# 3. Buat app & volume permanen (1 GB)
+fly apps create aetheris-skyward-guild
+fly volumes create aetheris_data --region sin --size 1
+
+# 4. Atur kata sandi rahasia Game Master
+fly secrets set GM_SECRET=kata-sandi-gm-rahasiamu
+
+# 5. Deploy!
+fly deploy
+```
+

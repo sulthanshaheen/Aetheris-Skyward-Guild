@@ -73,7 +73,8 @@
       <button id="btn-wardrobe" class="hud-btn">🧥 Avatar &amp; Kostum</button>
       <button id="btn-leaderboard" class="hud-btn">🏆 Peringkat</button>
       <button id="btn-gm" class="hud-btn gm-btn" title="Khusus Game Master">🛡️ GM</button>
-      <button id="btn-return-hub" class="hud-btn danger hidden">↩ Kembali ke Hub</button>
+      <button id="btn-audio" class="hud-btn" title="Aktifkan / Matikan Musik &amp; Efek Suara">🔊</button>
+      <button id="btn-return-hub" class="hud-btn danger hidden">↩ Hub</button>
     </div>
 
     <div class="hud-profile">
@@ -83,6 +84,15 @@
       <span class="pill coins">🪙 <strong id="hud-coins">50</strong></span>
     </div>
   </header>
+
+  <!-- ACTIVE SERVER EVENT PILL (TOP-LEFT BELOW BRAND SO HUD NEVER OVERFLOWS) -->
+  <div id="hud-event-pill" class="event-pill-float hidden">⚡ 2x EVENT</div>
+
+  <!-- GLOBAL GM ANNOUNCEMENT BANNER -->
+  <div id="gm-announcement-banner" class="gm-announcement hidden">
+    <span class="gm-ann-badge">📢 PENGUMUMAN GAME MASTER</span>
+    <span id="gm-announcement-text"></span>
+  </div>
 
   <!-- ACTIVE MISSION TRACKER -->
   <aside id="mission-tracker" class="mission-tracker hidden">
@@ -104,12 +114,41 @@
     </form>
   </section>
 
+  <!-- EMOTE BAR (BOTTOM CENTER) -->
+  <div id="emote-bar" class="emote-bar hidden">
+    <button type="button" class="emote-btn" data-emote="emote_wave" title="Tekan 1"><span>👋</span><b>1</b> Lambai</button>
+    <button type="button" class="emote-btn" data-emote="emote_cheer" title="Tekan 2"><span>🎉</span><b>2</b> Selebrasi</button>
+    <button type="button" class="emote-btn" data-emote="emote_dance" title="Tekan 3"><span>💃</span><b>3</b> Menari</button>
+    <button type="button" class="emote-btn" data-emote="emote_salute" title="Tekan 4"><span>🫡</span><b>4</b> Hormat</button>
+  </div>
+
+  <!-- FLOATING NPC INTERACTION PROMPT -->
+  <button id="npc-prompt" type="button" class="npc-prompt hidden">
+    <span class="prompt-key">F</span>
+    <span id="npc-prompt-text">Bicara dengan Master Eldrin</span>
+  </button>
+
+  <!-- NPC RPG DIALOG BOX -->
+  <section id="npc-dialog" class="npc-dialog hidden">
+    <div class="npc-dialog-head">
+      <div class="npc-portrait" id="npc-dialog-icon">📜</div>
+      <div>
+        <div id="npc-dialog-name" class="npc-dialog-name">Master Eldrin</div>
+        <div id="npc-dialog-role" class="npc-dialog-role">Pemberi Misi Guild</div>
+      </div>
+      <button id="npc-dialog-close" class="modal-close" style="margin-left:auto">✕</button>
+    </div>
+    <p id="npc-dialog-speech" class="npc-dialog-speech"></p>
+    <div id="npc-dialog-choices" class="npc-dialog-choices"></div>
+  </section>
+
   <!-- CONTROLS HINT -->
   <div id="controls-hint" class="controls-hint hidden">
     <span><b>WASD</b> Gerak</span>
-    <span><b>Space</b> Lompat / Double Jump</span>
-    <span><b>Shift</b> Sprint</span>
-    <span><b>Drag Mouse</b> Putar Kamera</span>
+    <span><b>Space</b> Lompat</span>
+    <span><b>F</b> NPC</span>
+    <span><b>1–4</b> Emote</span>
+    <span><b>Drag</b> Kamera</span>
   </div>
 
   <!-- TOAST -->
@@ -173,13 +212,23 @@
 
       <!-- GM AUTHENTICATED DASHBOARD -->
       <div id="gm-dashboard" class="hidden">
+        <!-- LIVE GM METRICS BAR -->
+        <div class="gm-stats-bar">
+          <div><strong id="gm-stat-online">0</strong><span>Pemain Aktif</span></div>
+          <div><strong id="gm-stat-pool">12</strong><span>Misi di Pool</span></div>
+          <div><strong id="gm-stat-cycle">#1</strong><span>Siklus Rotasi</span></div>
+          <div><strong id="gm-stat-clears">0</strong><span>Total Selesai</span></div>
+          <div><strong id="gm-stat-mult">1x</strong><span>Bonus Event</span></div>
+        </div>
+
         <div class="gm-tabs">
-          <button type="button" class="gm-tab active" data-tab="pool">🎲 Jadwal &amp; Pool Misi (<span id="gm-pool-count">0</span>)</button>
-          <button type="button" class="gm-tab" data-tab="create">➕ Tambah Misi ke Pool</button>
+          <button type="button" class="gm-tab active" data-tab="pool">🎲 Pool &amp; Rotasi (<span id="gm-pool-count">0</span>)</button>
+          <button type="button" class="gm-tab" data-tab="create">🗺️ Editor Map Visual</button>
+          <button type="button" class="gm-tab" data-tab="world">📢 Dunia &amp; Pemain</button>
           <button type="button" id="btn-gm-logout" class="hud-btn danger" style="margin-left:auto">Keluar GM</button>
         </div>
 
-        <!-- TAB: POOL & RANDOM SCHEDULER -->
+        <!-- TAB 1: POOL & RANDOM SCHEDULER -->
         <div id="gm-tab-pool" class="gm-tab-pane">
           <div class="gm-scheduler-card">
             <div class="form-row">
@@ -215,62 +264,117 @@
           <div id="gm-pool-list" class="gm-pool-list"></div>
         </div>
 
-        <!-- TAB: CREATE MISSION (GM ONLY) -->
+        <!-- TAB 2: VISUAL MAP & MISSION EDITOR (GM ONLY) -->
         <div id="gm-tab-create" class="gm-tab-pane hidden">
           <form id="studio-form" class="studio-form">
-            <label>
-              Judul Misi Baru
-              <input id="st-title" type="text" required placeholder="Contoh: Ekspedisi Puncak Awan" maxlength="70" />
-            </label>
-            <label>
-              Deskripsi Singkat
-              <input id="st-subtitle" type="text" placeholder="Contoh: Kumpulkan kristal kuno di jalur melayang!" maxlength="140" />
-            </label>
+            <input id="st-edit-id" type="hidden" value="" />
             <div class="form-row">
-              <label>
-                Kategori
-                <select id="st-category">
-                  <option value="daily">Misi Harian</option>
-                  <option value="weekly">Misi Mingguan</option>
-                  <option value="event">Event Spesial</option>
-                  <option value="permanent">Permanen</option>
-                </select>
+              <label style="flex:1.4">
+                Judul Misi <span id="st-mode-badge" class="mode-badge">Misi Baru</span>
+                <input id="st-title" type="text" required placeholder="Contoh: Ekspedisi Puncak Awan" maxlength="70" />
               </label>
               <label>
-                Tingkat Kesulitan
+                Kesulitan
                 <select id="st-difficulty">
                   <option value="Pemula">Pemula</option>
                   <option value="Menengah" selected>Menengah</option>
                   <option value="Mahir">Mahir</option>
                 </select>
               </label>
+              <label>
+                Tema Langit
+                <select id="st-theme">
+                  <option value="golden_sky">Langit Emas</option>
+                  <option value="emerald_dawn">Fajar Zamrud</option>
+                  <option value="sunset_citadel">Senja Benteng</option>
+                  <option value="crimson_dusk">Senja Merah</option>
+                  <option value="twilight_astral">Malam Astral</option>
+                </select>
+              </label>
             </div>
             <div class="form-row">
+              <label style="flex:2">
+                Deskripsi Misi
+                <input id="st-subtitle" type="text" placeholder="Contoh: Lintasi batu terapung & kumpulkan relik Aether!" maxlength="140" />
+              </label>
               <label>
-                Tema Langit &amp; Atmosfer
-                <select id="st-theme">
-                  <option value="golden_sky">Langit Emas Cerah</option>
-                  <option value="emerald_dawn">Fajar Zamrud</option>
-                  <option value="sunset_citadel">Senja Benteng Kuno</option>
-                  <option value="crimson_dusk">Senja Merah Membara</option>
-                  <option value="twilight_astral">Malam Astral Bercahaya</option>
+                Kategori
+                <select id="st-category">
+                  <option value="daily">Harian</option>
+                  <option value="weekly">Mingguan</option>
+                  <option value="event">Event</option>
+                  <option value="permanent">Permanen</option>
                 </select>
               </label>
               <label>
-                Jumlah Relik Target
-                <input id="st-relics" type="number" min="1" max="6" value="3" />
-              </label>
-              <label>
                 Hadiah Koin
-                <input id="st-coins" type="number" min="50" max="1500" step="25" value="250" />
+                <input id="st-coins" type="number" min="50" max="2000" step="25" value="250" />
               </label>
             </div>
+
+            <!-- INTERACTIVE VISUAL MAP EDITOR -->
+            <div class="map-editor-wrap">
+              <div class="map-palette" id="map-palette"></div>
+              <canvas id="gm-map-canvas" width="720" height="240" class="gm-map-canvas"></canvas>
+              <div class="map-inspector">
+                <span id="map-sel-info">Klik area kosong untuk menaruh objek, atau klik &amp; seret objek yang ada.</span>
+                <div class="map-inspector-btns">
+                  <button type="button" id="btn-map-y-down" class="hud-btn">Y -1</button>
+                  <button type="button" id="btn-map-y-up" class="hud-btn">Y +1</button>
+                  <button type="button" id="btn-map-del" class="hud-btn danger">🗑 Hapus</button>
+                  <button type="button" id="btn-map-template" class="hud-btn">⚡ Reset Template</button>
+                </div>
+              </div>
+            </div>
+
             <label class="checkbox-row">
               <input id="st-feature-now" type="checkbox" checked />
-              Langsung tampilkan di jadwal aktif sekarang (jika tidak dicentang, masuk ke Pool untuk rotasi acak berikutnya)
+              Langsung aktifkan di Portal Hub sekarang (otomatis terdeteksi <strong id="map-relic-count">3</strong> Relik Target)
             </label>
-            <button type="submit" class="btn-primary full">🛡️ Simpan Misi ke Pool Server</button>
+            <div class="form-row">
+              <button type="button" id="btn-studio-reset" class="hud-btn">Buat Misi Baru</button>
+              <button type="submit" class="btn-primary" style="flex:1">🛡️ Simpan &amp; Terbitkan Map Misi</button>
+            </div>
           </form>
+        </div>
+
+        <!-- TAB 3: WORLD CONTROL, ANNOUNCEMENTS & ONLINE PLAYERS -->
+        <div id="gm-tab-world" class="gm-tab-pane hidden">
+          <div class="gm-scheduler-card">
+            <h4 class="gm-sub-title">📢 Siarkan Pengumuman Global ke Semua Pemain</h4>
+            <form id="gm-announce-form" class="form-row">
+              <input id="gm-announce-input" type="text" required maxlength="150" placeholder="Contoh: Event 2x Koin dimulai! Kumpul di Skyward Hub!" style="flex:1" />
+              <button type="submit" class="hud-btn gold">📢 Siarkan</button>
+            </form>
+          </div>
+
+          <div class="gm-scheduler-card">
+            <h4 class="gm-sub-title">⚡ Event Pengganda Hadiah (Global Multiplier)</h4>
+            <div class="form-row">
+              <label>
+                Pengganda Koin &amp; XP
+                <select id="gm-event-mult">
+                  <option value="1">1x (Normal)</option>
+                  <option value="1.5">1.5x (Bonus Guild)</option>
+                  <option value="2">2x (Event Akhir Pekan)</option>
+                  <option value="3">3x (Mega Festival Aether)</option>
+                </select>
+              </label>
+              <label style="flex:1.6">
+                Label Event (Opsional)
+                <input id="gm-event-label" type="text" maxlength="60" placeholder="Contoh: Festival Langit!" />
+              </label>
+              <button type="button" id="btn-gm-save-event" class="hud-btn accent" style="align-self:flex-end">⚡ Terapkan Event</button>
+            </div>
+          </div>
+
+          <div class="gm-scheduler-card">
+            <div class="gm-players-head">
+              <h4 class="gm-sub-title">👥 Pemain Online Realtime</h4>
+              <button type="button" id="btn-gm-refresh-players" class="hud-btn">↻ Segarkan</button>
+            </div>
+            <div id="gm-online-players" class="gm-pool-list" style="max-height:175px"></div>
+          </div>
         </div>
       </div>
     </div>

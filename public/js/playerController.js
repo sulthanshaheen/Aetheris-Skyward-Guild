@@ -6,11 +6,12 @@ import * as THREE from 'three';
  * Shadow Blob landing indicator, and smooth drag-to-orbit camera.
  */
 export class PlayerController {
-  constructor(character, camera, domElement, shadowTexture, particles) {
+  constructor(character, camera, domElement, shadowTexture, particles, audio = null) {
     this.character = character;
     this.camera = camera;
     this.domElement = domElement;
     this.particles = particles;
+    this.audio = audio;
 
     this.pos = new THREE.Vector3(0, 3, 10);
     this.vel = new THREE.Vector3();
@@ -34,6 +35,8 @@ export class PlayerController {
     this.jumpsRemaining = 2;
     this.groundCollider = null;
     this.animState = 'idle';
+    this.activeEmote = null;
+    this.emoteTimer = 0;
     this.stepDustTimer = 0;
     this.inputEnabled = true;
 
@@ -76,7 +79,16 @@ export class PlayerController {
     this.grounded = false;
     this.jumpsRemaining = 2;
     this.groundCollider = null;
+    this.activeEmote = null;
+    this.emoteTimer = 0;
     this.character.root.position.copy(this.pos);
+  }
+
+  playEmote(emoteName, duration = 4.5) {
+    if (!this.grounded) return false;
+    this.activeEmote = emoteName;
+    this.emoteTimer = duration;
+    return true;
   }
 
   _bindInputs() {
@@ -192,12 +204,14 @@ export class PlayerController {
         this.coyoteTimer = 0;
         this.jumpBufferTimer = 0;
         this.jumpsRemaining = 1;
+        if (this.audio) this.audio.playJump();
         this.particles.burst(this.pos, { count: 8, color: 0xfff5d6, speed: 2.6, size: 0.32, upward: 1.0, life: 0.42 });
       } else if (this.jumpsRemaining > 0) {
         // Stylized skyward double-jump!
         this.vel.y = this.jumpVel * 0.92;
         this.jumpsRemaining = 0;
         this.jumpBufferTimer = 0;
+        if (this.audio) this.audio.playDoubleJump();
         this.particles.burst(this.pos, { count: 14, color: 0x76fff2, speed: 4.0, size: 0.36, upward: 0.6, life: 0.5 });
       }
     }
@@ -219,6 +233,7 @@ export class PlayerController {
     this._resolveVertical(worldBuilder.colliders, prevY, worldBuilder);
 
     if (!wasGrounded && this.grounded) {
+      if (this.audio) this.audio.playLand();
       this.particles.burst(this.pos, { count: 7, color: 0xdfe8cf, speed: 2.2, size: 0.28, upward: 0.8, life: 0.35 });
     }
 
@@ -231,6 +246,7 @@ export class PlayerController {
         this.vel.y = g.power;
         this.grounded = false;
         this.jumpsRemaining = 1;
+        if (this.audio) this.audio.playGeyser();
         this.particles.burst(this.pos, { count: 14, color: 0x9cfcff, speed: 3.8, size: 0.42, upward: 5.0, life: 0.5 });
       }
     }
@@ -261,16 +277,27 @@ export class PlayerController {
     if (this.grounded && hSpeed > 3.5) {
       this.stepDustTimer -= safeDt;
       if (this.stepDustTimer <= 0) {
-        this.stepDustTimer = isSprinting ? 0.16 : 0.25;
+        this.stepDustTimer = isSprinting ? 0.18 : 0.28;
+        if (this.audio) this.audio.playStep();
         this.particles.burst(this.pos, { count: 3, color: 0xeaf2dc, speed: 1.2, size: 0.22, upward: 0.5, life: 0.3 });
       }
     }
 
-    // Animation state
+    // Animation state (emotes stay active until timer ends or player moves/jumps)
+    if (this.activeEmote) {
+      this.emoteTimer -= safeDt;
+      if (!this.grounded || moveDir.lengthSq() > 0 || this.emoteTimer <= 0) {
+        this.activeEmote = null;
+        this.emoteTimer = 0;
+      }
+    }
+
     if (!this.grounded) {
       this.animState = this.vel.y > 0.8 ? 'jump' : 'fall';
     } else if (hSpeed > 0.6) {
       this.animState = 'run';
+    } else if (this.activeEmote) {
+      this.animState = this.activeEmote;
     } else {
       this.animState = 'idle';
     }

@@ -1,6 +1,8 @@
-node_modules/
+node_modules
+.git
+.gitignore
 server/data/db.json
 server/data/*.tmp
-.env
 .DS_Store
 *.log
+README.md
