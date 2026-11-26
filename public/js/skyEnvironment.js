@@ -28,8 +28,9 @@ export class SkyEnvironment {
     this.sunLight = new THREE.DirectionalLight(0xfff1cc, 1.9);
     this.sunLight.position.set(35, 65, 28);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.width = 2048;
-    this.sunLight.shadow.mapSize.height = 2048;
+    const shadowRes = window.innerWidth <= 900 ? 1024 : 2048;
+    this.sunLight.shadow.mapSize.width = shadowRes;
+    this.sunLight.shadow.mapSize.height = shadowRes;
     this.sunLight.shadow.camera.near = 5;
     this.sunLight.shadow.camera.far = 180;
     const d = 46;

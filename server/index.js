@@ -22,7 +22,15 @@ const validGmTokens = new Set();
 
 app.use(express.json({ limit: '1mb' }));
 app.use('/vendor/three', express.static(path.join(__dirname, '..', 'node_modules', 'three')));
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('sw.js')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    } else if (filePath.endsWith('.webmanifest')) {
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    }
+  }
+}));
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, online: countActivePlayers() });

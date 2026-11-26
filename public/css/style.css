@@ -30,6 +30,7 @@ html, body {
   width: 100vw;
   height: 100vh;
   cursor: grab;
+  touch-action: none;
 }
 #game-canvas:active {
   cursor: grabbing;
@@ -1258,6 +1259,105 @@ html, body {
   font-weight: 700;
 }
 
+.mobile-only {
+  display: none;
+}
+
+/* ================= MOBILE VIRTUAL TOUCH CONTROLS ================= */
+.mobile-controls {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 22;
+}
+
+.mobile-joystick {
+  position: fixed;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(22px, env(safe-area-inset-bottom));
+  width: 124px;
+  height: 124px;
+  border-radius: 50%;
+  background: rgba(13, 24, 44, 0.42);
+  border: 2px solid rgba(240, 196, 92, 0.55);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  touch-action: none;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+}
+.mobile-joystick-ring {
+  position: absolute;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  pointer-events: none;
+}
+.mobile-joystick-knob {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffe699, #25b8b8);
+  border: 2px solid #fff7dc;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.mobile-action-pad {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(22px, env(safe-area-inset-bottom));
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  pointer-events: auto;
+}
+.mobile-btn {
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  background: rgba(13, 24, 44, 0.58);
+  backdrop-filter: blur(8px);
+  color: #fff9e6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  touch-action: none;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
+  transition: transform 0.08s ease, background 0.12s ease;
+}
+.mobile-btn span {
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  margin-top: 2px;
+}
+.mobile-btn.jump {
+  width: 78px;
+  height: 78px;
+  font-size: 22px;
+  background: linear-gradient(135deg, rgba(33, 166, 168, 0.85), rgba(56, 240, 216, 0.72));
+  border-color: #9effef;
+  color: #091d26;
+}
+.mobile-btn.jump.pressed {
+  transform: scale(0.91);
+  filter: brightness(1.15);
+}
+.mobile-btn.sprint {
+  width: 56px;
+  height: 56px;
+  font-size: 16px;
+  border-color: var(--gold-soft);
+}
+.mobile-btn.sprint.active {
+  background: linear-gradient(135deg, #d99d2c, #ffd966);
+  color: #161d2b;
+  border-color: #fff2bd;
+}
+
 /* Responsive HUD fit for narrower / split-pane screens (<= 1120px) */
 @media (max-width: 1120px) {
   .hud-top { gap: 6px; left: 10px; right: 10px; }
@@ -1267,6 +1367,152 @@ html, body {
   .pill { padding: 3px 7px; font-size: 11px; }
   .controls-hint { display: none; }
   .emote-bar { left: auto; right: 14px; transform: none; }
+}
+
+/* Full Mobile Phone Layout (<= 860px portrait & mobile landscape) */
+@media (max-width: 860px), (pointer: coarse) and (max-width: 960px) {
+  .mobile-only { display: inline-flex; }
+  .hud-top {
+    top: max(8px, env(safe-area-inset-top));
+    left: 8px;
+    right: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .hud-brand {
+    display: none;
+  }
+  .hud-actions {
+    flex: 1;
+    justify-content: flex-start;
+    padding: 5px 7px;
+    gap: 5px;
+  }
+  .hud-actions .btn-lbl {
+    display: none;
+  }
+  .hud-btn {
+    padding: 6px 9px;
+    font-size: 14px;
+  }
+  .hud-profile {
+    padding: 5px 8px;
+    gap: 5px;
+  }
+  .pill.level {
+    display: none;
+  }
+  .event-pill-float {
+    top: 56px;
+    left: 10px;
+    font-size: 11px;
+    padding: 4px 10px;
+  }
+  .mission-tracker {
+    top: 56px;
+    right: 8px;
+    width: 215px;
+    padding: 8px 10px;
+  }
+  .mission-tracker li {
+    font-size: 11.5px;
+  }
+  .chat-panel {
+    left: 10px;
+    right: 10px;
+    bottom: 162px;
+    width: auto;
+    z-index: 30;
+  }
+  .chat-panel.mobile-collapsed {
+    display: none;
+  }
+  .emote-bar {
+    left: 50%;
+    right: auto;
+    bottom: max(156px, calc(154px + env(safe-area-inset-bottom)));
+    transform: translateX(-50%);
+    padding: 4px 6px;
+    gap: 5px;
+  }
+  .emote-btn {
+    padding: 5px 8px;
+    font-size: 13px;
+  }
+  .emote-btn b {
+    display: none;
+  }
+  .npc-prompt {
+    bottom: 204px;
+    font-size: 12px;
+    padding: 7px 14px;
+  }
+  .npc-dialog {
+    bottom: 12px;
+    max-height: 62vh;
+    overflow-y: auto;
+    padding: 14px;
+  }
+  /* Mobile Entry Screen: 3D Avatar Showcase on top + scrollable bottom sheet! */
+  .entry-screen {
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 10px;
+    background: linear-gradient(180deg, rgba(10, 20, 40, 0.12) 0%, rgba(10, 20, 40, 0.05) 38%, rgba(10, 20, 40, 0.72) 100%);
+  }
+  .entry-stage-badge {
+    max-width: 100%;
+    gap: 8px;
+  }
+  .entry-logo {
+    padding: 8px 12px;
+  }
+  .entry-logo h1 {
+    font-size: 14px;
+  }
+  .entry-logo p {
+    font-size: 10.5px;
+  }
+  .avatar-spotlight {
+    display: none;
+  }
+  .entry-panel {
+    width: 100%;
+    max-width: 100%;
+    max-height: 55vh;
+    padding: 14px 16px;
+    border-radius: 18px;
+    gap: 10px;
+  }
+  .entry-panel-head h2 {
+    font-size: 17px;
+  }
+  .entry-panel-head p {
+    font-size: 11.5px;
+  }
+  .avatar-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 7px;
+  }
+  .avatar-card {
+    padding: 8px;
+  }
+  .avatar-card-name {
+    font-size: 12.5px;
+  }
+  .avatar-card-role {
+    font-size: 10px;
+  }
+  .btn-enter-game {
+    padding: 11px 14px;
+    font-size: 14px;
+  }
+  .gm-stats-bar {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .form-row {
+    flex-direction: column;
+  }
 }
 
 

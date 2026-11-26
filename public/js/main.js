@@ -8,6 +8,7 @@ import { PlayerController } from './playerController.js';
 import { NpcManager } from './npcManager.js';
 import { AudioManager } from './audioManager.js';
 import { GmMapEditor } from './gmMapEditor.js';
+import { MobileControls, isMobileDevice } from './mobileControls.js';
 
 // ======================== STATE ========================
 
@@ -44,8 +45,8 @@ const remotePlayers = new Map(); // socketId -> { character, targetPos, targetRo
 // ======================== THREE.JS CORE ========================
 
 const canvas = document.getElementById('game-canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !isMobileDevice(), powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobileDevice() ? 1.5 : 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -65,6 +66,7 @@ const npcManager = new NpcManager(scene);
 const localCharacter = new HumanCharacter();
 const controller = new PlayerController(localCharacter, camera, canvas, textures.shadow, particles, audio);
 controller.attachToScene(scene);
+const mobileControls = new MobileControls(controller);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -1126,6 +1128,14 @@ function bindUI() {
     renderWardrobe();
     openModal('modal-wardrobe');
   });
+  // Mobile chat toggle button
+  const chatToggleBtn = document.getElementById('btn-chat-toggle');
+  if (chatToggleBtn) {
+    chatToggleBtn.addEventListener('click', () => {
+      document.getElementById('chat-panel').classList.toggle('mobile-collapsed');
+    });
+  }
+
   document.getElementById('btn-gm').addEventListener('click', openGmPanel);
   const audioBtn = document.getElementById('btn-audio');
   const syncAudioBtn = () => {
@@ -1239,9 +1249,12 @@ function bindUI() {
     audio.playPortal();
     document.getElementById('entry-screen').classList.add('hidden');
     document.getElementById('hud-top').classList.remove('hidden');
-    document.getElementById('chat-panel').classList.remove('hidden');
+    const chatPanel = document.getElementById('chat-panel');
+    chatPanel.classList.remove('hidden');
+    if (isMobileDevice()) chatPanel.classList.add('mobile-collapsed');
     document.getElementById('emote-bar').classList.remove('hidden');
     document.getElementById('controls-hint').classList.remove('hidden');
+    mobileControls.show();
 
     controller.inputEnabled = true;
     controller.facingYaw = Math.PI;
@@ -1516,9 +1529,14 @@ function animate() {
     controller.shadowMesh.scale.setScalar(1.0);
     controller.shadowMesh.material.opacity = 0.8;
 
-    // Frame character cleanly in the left-center of the screen so the right entry panel never covers them
-    camera.position.set(0.85, 2.85, 13.7);
-    camera.lookAt(0.85, 2.55, 10);
+    // Frame character cleanly: centered high on mobile portrait, or left-center on desktop!
+    if (window.innerWidth <= 860) {
+      camera.position.set(0, 2.55, 13.9);
+      camera.lookAt(0, 1.85, 10);
+    } else {
+      camera.position.set(0.85, 2.85, 13.7);
+      camera.lookAt(0.85, 2.55, 10);
+    }
 
     skyEnv.update(dt, elapsed, localCharacter.root.position);
     particles.update(dt);
@@ -1623,6 +1641,35 @@ async function boot() {
   }
 
   animate();
+}
+
+// ======================== PWA SERVICE WORKER & INSTALL ========================
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
+let deferredPwaPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPwaPrompt = e;
+  const installBtn = document.getElementById('btn-install-pwa');
+  if (installBtn) installBtn.classList.remove('hidden');
+});
+
+const installPwaBtn = document.getElementById('btn-install-pwa');
+if (installPwaBtn) {
+  installPwaBtn.addEventListener('click', async () => {
+    if (!deferredPwaPrompt) return;
+    deferredPwaPrompt.prompt();
+    const { outcome } = await deferredPwaPrompt.userChoice;
+    deferredPwaPrompt = null;
+    if (outcome === 'accepted') {
+      installPwaBtn.classList.add('hidden');
+      showToast('📲 Aetheris berhasil dipasang di Layar Utama!', 'gold');
+    }
+  });
 }
 
 boot();

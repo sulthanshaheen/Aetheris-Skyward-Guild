@@ -41,7 +41,11 @@ export class PlayerController {
     this.inputEnabled = true;
 
     this.keys = new Set();
+    this.virtualX = 0;
+    this.virtualZ = 0;
+    this.virtualSprint = false;
     this.isDragging = false;
+    this.dragPointerId = null;
     this.lastMouse = { x: 0, y: 0 };
 
     // Crisp blob shadow underneath feet for accurate parkour landings!
@@ -91,6 +95,17 @@ export class PlayerController {
     return true;
   }
 
+  setVirtualInput(x, z, sprint = false) {
+    this.virtualX = x;
+    this.virtualZ = z;
+    this.virtualSprint = sprint;
+  }
+
+  triggerJump() {
+    if (!this.inputEnabled) return;
+    this.jumpBufferTimer = 0.16;
+  }
+
   _bindInputs() {
     window.addEventListener('keydown', (e) => {
       if (!this.inputEnabled) return;
@@ -108,26 +123,35 @@ export class PlayerController {
     });
 
     this.domElement.addEventListener('pointerdown', (e) => {
-      if (e.button === 0 || e.button === 2) {
-        this.isDragging = true;
-        this.lastMouse.x = e.clientX;
-        this.lastMouse.y = e.clientY;
+      if (e.button === 0 || e.button === 2 || e.pointerType === 'touch') {
+        if (this.dragPointerId === null) {
+          this.isDragging = true;
+          this.dragPointerId = e.pointerId;
+          this.lastMouse.x = e.clientX;
+          this.lastMouse.y = e.clientY;
+        }
       }
     });
 
-    window.addEventListener('pointerup', () => {
-      this.isDragging = false;
-    });
+    const endDrag = (e) => {
+      if (e.pointerId === this.dragPointerId) {
+        this.isDragging = false;
+        this.dragPointerId = null;
+      }
+    };
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
 
     window.addEventListener('pointermove', (e) => {
-      if (!this.isDragging) return;
+      if (!this.isDragging || e.pointerId !== this.dragPointerId) return;
       const dx = e.clientX - this.lastMouse.x;
       const dy = e.clientY - this.lastMouse.y;
       this.lastMouse.x = e.clientX;
       this.lastMouse.y = e.clientY;
 
-      this.camYaw -= dx * 0.0065;
-      this.camPitch = Math.max(0.08, Math.min(1.18, this.camPitch + dy * 0.0055));
+      const sens = e.pointerType === 'touch' ? 0.0085 : 0.0065;
+      this.camYaw -= dx * sens;
+      this.camPitch = Math.max(0.08, Math.min(1.18, this.camPitch + dy * (sens * 0.85)));
     });
 
     this.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -155,7 +179,7 @@ export class PlayerController {
       if (this.keys.has('KeyE')) this.camYaw -= 2.1 * safeDt;
     }
 
-    // Horizontal movement input relative to camera yaw
+    // Horizontal movement input (Keyboard + Mobile Virtual Joystick combined!)
     let inX = 0;
     let inZ = 0;
     if (this.inputEnabled && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
@@ -163,6 +187,8 @@ export class PlayerController {
       if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) inZ -= 1;
       if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) inX -= 1;
       if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) inX += 1;
+      inX += this.virtualX;
+      inZ += this.virtualZ;
     }
 
     const forward = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
@@ -171,8 +197,9 @@ export class PlayerController {
       .addScaledVector(forward, inZ)
       .addScaledVector(right, inX);
 
-    const isSprinting = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
-    const targetSpeed = moveDir.lengthSq() > 0 ? (isSprinting ? this.sprintSpeed : this.moveSpeed) : 0;
+    const inputMag = Math.min(1, moveDir.length());
+    const isSprinting = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.virtualSprint;
+    const targetSpeed = inputMag > 0.05 ? (isSprinting ? this.sprintSpeed : this.moveSpeed) * inputMag : 0;
 
     if (moveDir.lengthSq() > 0) {
       moveDir.normalize();
